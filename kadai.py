@@ -2,25 +2,53 @@ import time
 import csv
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
+from collections import deque
 
 
 START_URL = "https://www.musashino-u.ac.jp/"
 
-
 page_dict = {}
 
-# すでにアクセスしたURLを保存
 visited = set()
-
 
 DOMAIN = urlparse(START_URL).netloc
 
+# これからアクセスするURLを保存するキュー
+queue = deque([START_URL])
 
-def crawl(url):
-    # すでにアクセス済みなら何もしない
+# すでにqueueに追加したURL
+queued = {START_URL}
+
+
+def normalize_url(url):
+
+    parsed = urlparse(url)
+
+    # http:// を https:// に統一
+    scheme = "https" if parsed.scheme in ["http", "https"] else parsed.scheme
+
+    # #以降を削除するためfragmentを空文字にする
+    normalized = parsed._replace(
+        scheme=scheme,
+        fragment=""
+    )
+
+    return urlunparse(normalized)
+
+
+while queue:
+    # キューの先頭からURLを1つ取り出す
+    url = queue.popleft()
+
+    # queueから取り出したのでqueuedから削除
+    queued.discard(url)
+
+    # すでにアクセス済みなら無視
     if url in visited:
-        return
+        continue
+
+    # アクセス済みに追加
     visited.add(url)
 
     print(f"アクセス中: {url}")
@@ -28,12 +56,13 @@ def crawl(url):
     # Webサイトへの負荷を軽減
     time.sleep(1)
 
+    # Webページを取得
     response = requests.get(url)
 
     # 正常に取得できなかった場合
     if response.status_code != 200:
         print(f"取得失敗: {response.status_code} {url}")
-        return
+        continue
 
     # Content-Typeを取得
     content_type = response.headers.get("Content-Type", "").lower()
@@ -41,7 +70,7 @@ def crawl(url):
     # HTML以外のコンテンツは除外
     if "text/html" not in content_type:
         print(f"HTML以外のため除外: {url} ({content_type})")
-        return
+        continue
 
     # HTMLをBeautifulSoupオブジェクトに変換
     soup = BeautifulSoup(response.content, "html.parser")
@@ -69,8 +98,8 @@ def crawl(url):
         # 相対URLを絶対URLに変換
         next_url = urljoin(url, href)
 
-        # #以降は同じページなので削除
-        next_url = next_url.split("#")[0]
+        # URLを正規化
+        next_url = normalize_url(next_url)
 
         # URLを解析
         parsed_url = urlparse(next_url)
@@ -79,27 +108,14 @@ def crawl(url):
         if parsed_url.scheme not in ["http", "https"]:
             continue
 
-        # 武蔵野大学と同じドメインだけを対象に
+        # 武蔵野大学と同じドメインだけを対象にする
         if parsed_url.netloc != DOMAIN:
             continue
 
-        response = requests.get(url)
-
-        # レスポンスヘッダーから Content-Type を取得
-        content_type = response.headers.get("Content-Type", "").lower()
-
-        if "text/html" not in content_type:
-        
-         print(f"HTML以外のため除外: {url} ({content_type})")
-        
-        return
-
-        # リンク先をさらに巡回
-        crawl(next_url)
-
-
-# トップページからクローリング開始
-crawl(START_URL)
+        # 未アクセスかつqueueにも入っていないURLだけ追加
+        if next_url not in visited and next_url not in queued:
+            queue.append(next_url)
+            queued.add(next_url)
 
 
 # CSVファイルとして保存
